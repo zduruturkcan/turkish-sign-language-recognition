@@ -1,144 +1,88 @@
 # Turkish Sign Language (TSL) Recognition — AUTSL Subset
 
-A small isolated sign-language recognition pipeline built on a 20-word subset of the
-[AUTSL](https://cvml.ankara.edu.tr/datasets/) (Ankara University Turkish Sign
-Language) dataset. Body and hand landmarks are extracted from each video with
-MediaPipe, then fed into three LSTM-based classifiers of increasing complexity —
-a baseline LSTM, an Attention-LSTM, and a Spatial-Attention-LSTM — which are
-compared against each other and a simple ensemble.
+A small isolated sign-language recognition pipeline built on a 20-word subset of the [AUTSL](https://cvml.ankara.edu.tr/datasets/) (Ankara University Turkish Sign Language) dataset. Body and hand landmarks are extracted from each video with MediaPipe, normalized to the signer's body, and fed into three LSTM-based classifiers of increasing complexity: a baseline LSTM, an Attention-LSTM, and a Spatial-Attention-LSTM. The models are compared against each other and against a simple ensemble.
+
+> **Versions.** This README describes the current version (`SIGN_IT.ipynb`). The first version, with the results reported in `SIGN_IT-Paper.pdf`, is preserved in the git tag [`v1-paper`](../../tree/v1-paper). Its results differ substantially; see [Version history](#version-history).
 
 ## Pipeline
 
-1. **Data.** 20 Turkish words are sampled from AUTSL (60 videos per word where
-   available), downloaded via Kaggle.
-2. **Landmark extraction.** Each video frame is run through MediaPipe's Pose
-   Landmarker and Hand Landmarker to produce a 225-dimensional feature vector per
-   frame (33 pose points + 21 left-hand points + 21 right-hand points, each x/y/z).
-   Every video is resampled to a fixed 30 frames.
-3. **Motion features.** Frame-to-frame velocity is concatenated onto the raw
-   coordinates, doubling the feature dimension to 450.
-4. **Signer-independent split.** Train/validation/test are split by *signer*, not
-   randomly — the model is evaluated on people it never saw during training, which
-   is a meaningfully harder (and more honest) test than a random split.
-5. **Models.**
-   - **Baseline LSTM** — classifies from the final hidden state only.
-   - **Attention LSTM** — learns a weight for every frame ("how important was this
-     frame for this sign?") and classifies from the weighted sum.
-   - **Spatial-Attention LSTM** — adds a second attention mechanism that also
-     weighs *which body part* (pose / left hand / right hand) matters per frame,
-     before feeding into the same temporal-attention LSTM.
-   - **Ensemble** — averages the softmax outputs of the baseline and attention
-     models.
+1. **Data.** 20 Turkish words are sampled from AUTSL (60 videos per word), downloaded via Kaggle. 1,200 clips in total.
+2. **Landmark extraction.** Each video frame is run through MediaPipe's Pose Landmarker and Hand Landmarker to produce a 225-dimensional vector per frame (33 pose points + 21 left-hand points + 21 right-hand points, each x/y/z). Every video is resampled to a fixed 30 frames.
+3. **Normalization.** Raw MediaPipe coordinates are fractions of the image, so they depend on where the signer stands and how far they are from the camera. Each sequence is re-expressed relative to the signer's own body: the shoulder midpoint becomes the origin and coordinates are divided by shoulder width (median over the frames of the sequence). Undetected landmarks stay exactly zero. This can be switched off with `NORMALIZE_LANDMARKS = False`.
+4. **Motion features.** Frame-to-frame velocity is concatenated onto the normalized coordinates, doubling the feature dimension to 450.
+5. **Signer-independent split.** Train/validation/test are split by *signer*, not randomly (7 / 2 / 2 signers; 657 / 297 / 246 clips). The model is evaluated on people it never saw during training, which is a harder and more honest test than a random split.
+6. **Models.**
+   - **Baseline LSTM**: classifies from the final hidden state only.
+   - **Attention LSTM**: learns a weight for every frame ("how important was this frame for this sign?") and classifies from the weighted sum.
+   - **Spatial-Attention LSTM**: adds a second attention mechanism that weighs *which body part* (pose / left hand / right hand) matters in each frame, before feeding into the same temporal-attention LSTM.
+   - **Ensemble**: averages the softmax outputs of the baseline and attention models.
+7. **Training.** Adam, 100 epochs, batch size 8, hidden size 64, label smoothing 0.1, weight decay 1e-4. The weights with the best *validation* accuracy are restored before evaluating on the test set.
 
 ## Results
 
-Full write-up, methodology, and confusion-matrix analysis are in
-[`SIGN_IT-Paper.pdf`](./SIGN_IT-Paper.pdf). Table 3 from that report, reproduced
-here — single-run accuracy/F1 alongside the more reliable 3-seed mean ± std
-(signer-independent split, 246 test examples across 20 classes):
+Signer-independent split, 246 test clips, 20 classes. Single-run values come from the main run; the 3-seed values are mean ± standard deviation over seeds 42, 123 and 7.
 
-| Method                              |     Accuracy     |    F1 (macro)     |
-|--------------------------------------|:-----------------:|:------------------:|
-| Baseline LSTM (1 run)                |       53.25%       |       48.16%       |
-| Baseline LSTM (3-seed mean ± std)    |   51.63% ± 3.91    |   47.65% ± 3.80    |
-| Attention LSTM (1 run)               |       60.57%       |       59.37%       |
-| Attention LSTM (3-seed mean ± std)   |   49.86% ± 1.64    |   44.99% ± 2.55    |
-| Spatial+Temporal Attn. (1 run)       |       33.74%       |       30.13%       |
-| Spatial+Temporal Attn. (3-seed mean ± std) | 37.67% ± 4.46 |   34.26% ± 4.32    |
-| Ensemble (Baseline + Attention, 1 run) |     55.69%        |       51.19%       |
+| Method | Accuracy | F1 (macro) |
+| --- | --- | --- |
+| Baseline LSTM (1 run) | 75.61% | 73.02% |
+| Baseline LSTM (3-seed mean ± std) | 79.54% ± 2.76 | 77.04% ± 3.45 |
+| Attention LSTM (1 run) | 86.18% | 85.06% |
+| Attention LSTM (3-seed mean ± std) | 84.96% ± 2.02 | 83.71% ± 1.79 |
+| Spatial+Temporal Attn. (1 run) | 84.15% | 83.90% |
+| Spatial+Temporal Attn. (3-seed mean ± std) | 85.09% ± 1.07 | 84.23% ± 0.82 |
+| Ensemble (Baseline + Attention, 1 run) | 87.40% | 85.70% |
 
-**The headline finding is in the 3-seed numbers, not the single-run ones.** A single
-training run makes the Attention-LSTM look like the clear winner (+7.3 accuracy
-points over the baseline). Averaged over three random seeds, that advantage
-disappears — the Baseline's 3-seed mean (51.6% ± 3.9) is actually marginally
-*higher* than the Attention-LSTM's (49.9% ± 1.6), and their standard-deviation
-ranges overlap almost entirely. What *does* hold up under multi-seed evaluation:
-the Attention-LSTM is consistently more stable (roughly half the baseline's
-standard deviation), and the Spatial+Temporal model is the one architecture that's
-robustly worse than both others under every protocol tested (single-run, 3-seed,
-and ensemble) — its confusion matrix shows a mode-collapse pattern, with many
-unrelated classes misclassified into a small handful of "default" predictions,
-most visibly `turkiye`.
+**What the results show.** Temporal attention improves over the baseline, by about 5 points in the 3-seed mean (85.0% vs 79.5%). The Spatial+Temporal model performs on par with the Attention LSTM (85.1% vs 85.0%) and varies least across seeds. The ensemble is slightly ahead of either model alone in a single evaluation (no seed averaging). With only 3 seeds and two test signers, differences of about 2 points or less (for example Attention vs Spatial) are within the noise.
 
-Two words — `hafif` ("light") and `hali` ("carpet") — were consistently the
-hardest to classify across every model and every seed.
+The hardest words are `vergi`, `hakli` and `nasil`; for the baseline also `persembe` and `yemek`. Landmark detection was not the cause: no class has undetected frames.
+
+## Version history
+
+| | v1 (tag `v1-paper`, `SIGN_IT-Paper.pdf`) | Current |
+| --- | --- | --- |
+| Landmarks | Raw image coordinates | Shoulder-centered, scaled by shoulder width |
+| Regularization | Label smoothing and weight decay added after the v1 results were collected | Used for all models |
+| Baseline accuracy (1 run / 3-seed) | 53.25% / 51.63% | 75.61% / 79.54% |
+| Attention accuracy (1 run / 3-seed) | 60.57% / 49.86% | 86.18% / 84.96% |
+| Spatial+Temporal accuracy (1 run / 3-seed) | 33.74% / 37.67% | 84.15% / 85.09% |
+| Ensemble accuracy (1 run) | 55.69% | 87.40% |
+| Main finding | Attention advantage disappears over 3 seeds; Spatial+Temporal is clearly worst | Attention beats baseline over 3 seeds; Spatial+Temporal is on par with Attention |
+| Live webcam demo | In progress | Working (qualitative only) |
+
+Several changes were made between v1 and the current version at the same time (normalization, regularization, checkpoint selection), so these results alone do not show which one is responsible for the improvement. Normalization is the most plausible main contributor, but this has not been tested separately yet.
 
 ## A note on evaluation quality
 
-A few things are worth knowing about this setup before over-trusting any single
-number above:
+- With only 11 distinct signers and about 33 training clips per class (7 training signers), this is a small dataset for a 20-way sequence classification problem. Single-run results differ from the 3-seed means (for example the baseline scores 75.6% in its main run and 79.5% on average), so the multi-seed numbers are the more reliable comparison.
+- The test set has only two signers, so results depend on who they are.
+- The confusion matrices and classification reports pin `labels=range(num_classes)` instead of letting scikit-learn infer them from the classes present in a given run, so the matrix cannot silently shrink and shift the axis labels.
+- The label smoothing and weight decay settings are there to reduce overconfidence on this small dataset.
+- A per-class check for landmark-detection failures is included after the class-balance cell, so a badly performing class can be checked against data quality before blaming the model.
 
-- With only ~11 distinct signers and ~30 training examples per class, this is a
-  genuinely small dataset for a 20-way sequence classification problem — the
-  paper's own central methodological finding is that single-run comparisons
-  between closely-matched architectures are unreliable at this scale and can
-  reverse under multi-seed re-evaluation (see above).
-- The confusion matrix and classification report explicitly pin `labels=range(num_classes)`
-  rather than letting scikit-learn infer them from whichever classes happen to
-  appear in a given run. With a non-stratified, signer-independent split, a class
-  can end up with very few (or zero) test examples in a given run; without pinning
-  the labels, the matrix can silently shrink and shift every later class's axis
-  label by one.
-- Training uses `label_smoothing=0.1` and `weight_decay=1e-4` specifically to fight
-  the overconfidence you'd otherwise get from cross-entropy on this little data —
-  i.e. the model outputting a very high probability for the wrong class, which is a
-  calibration failure, not just an accuracy one. (This was added after the results
-  above were collected, so re-running the notebook now may shift these numbers
-  somewhat — the qualitative story, especially the single-run-vs-3-seed gap, is
-  expected to hold.)
-- One class (`misafir` in early runs) scored 0.00 precision/recall across every
-  model. A per-class landmark-detection-failure check is included right after the
-  class-balance cell — worth running before assuming a badly-performing class is a
-  modeling problem rather than a data-quality one.
+## Live webcam demo
+
+The notebook ends with an optional live demo: record yourself signing in Colab and get a prediction from the Attention LSTM. A framing check (guide box, distance and centering compared with the training videos) runs before the 3-second recording, and landmarks are extracted in the same MediaPipe `VIDEO` mode as in training. The demo is qualitative: accuracy on live footage is expected to be lower than on the AUTSL test signers, because a personal webcam differs from the dataset's studio setup in camera, lighting, framing and background.
 
 ## Setup
 
-This notebook is written for **Google Colab** (it uses `google.colab.drive` and
-expects a GPU/CPU runtime there — it hasn't been adapted for local execution).
+This notebook is written for **Google Colab** (it uses `google.colab.drive`; it has not been adapted for local execution).
 
 1. Open the notebook in Colab.
-2. Run the setup cell, then **restart the runtime** when prompted (MediaPipe needs
-   a fresh runtime after install).
-3. Mount Google Drive when prompted — this is where the dataset, extracted
-   landmark arrays, and trained models get cached across sessions.
-4. You'll need a Kaggle account and an API token (`kaggle.json`) to download the
-   [AUTSL dataset from Kaggle](https://www.kaggle.com/datasets/sttaseen/autsl) —
-   the notebook will prompt you to upload it the first time and reuse it after
-   that.
-5. Run the notebook top to bottom. Landmark extraction over ~1200 videos takes
-   roughly 1.5–2 hours; once done, `X.npy`/`y.npy`/etc. are saved to Drive, and
-   later sessions can skip straight to the **"Resume from saved arrays"** cell to
-   avoid re-extracting.
+2. Run the setup cell, then **restart the runtime** if prompted (MediaPipe needs a fresh runtime after installation).
+3. Mount Google Drive when prompted. The dataset, extracted landmark arrays and trained models are cached there across sessions.
+4. You need a Kaggle account and an API token (`kaggle.json`) to download the [AUTSL dataset from Kaggle](https://www.kaggle.com/datasets/sttaseen/autsl). The notebook asks you to upload it the first time and reuses it afterwards. Never commit `kaggle.json` to a repository.
+5. Run the notebook top to bottom. Landmark extraction over about 1,200 videos takes roughly 1.5–2 hours; afterwards `X.npy`, `y.npy` and related files are saved to Drive, and later sessions can skip to the **"Resume from saved arrays"** cell.
 
-**If you reopen this notebook in a new session:** restart the runtime and run it
-top to bottom rather than jumping to cells in the middle. This notebook mixes
-"run fresh every time" cells with "resume from Drive" cells, and running things
-out of order is the single most common source of confusing errors here (stale
-variables, dimension mismatches between a model built earlier and data added
-later, etc.) — see the debugging notes near the top of the notebook for specifics.
+If you reopen the notebook in a new session, restart the runtime and run it top to bottom rather than jumping into the middle. The notebook mixes "run fresh" cells with "resume from Drive" cells, and running them out of order can cause stale variables or dimension mismatches.
 
 ## Future work
 
-- A live webcam demo (record yourself signing, get a prediction) is in progress —
-  early testing showed accuracy on live footage is much lower than on the AUTSL
-  test set, which is expected given how different a personal webcam is from the
-  dataset's studio recording setup (camera, lighting, framing, and only this one
-  dataset's signers to generalize from). A pre-recording "framing check" (checking
-  distance from camera and centering against the training data's own distribution,
-  similar to how a document-scanner app guides you to align a page) is being
-  added to reduce that gap before this ships.
-- Run additional seeds to narrow the confidence intervals in the results table
-  further, and investigate directly why `hafif`/`hali` and the Spatial+Temporal
-  model's mode-collapse classes remain unrecognized.
-- Explore a graph-convolutional (ST-GCN-style) treatment of the landmark skeleton
-  as a stronger alternative to the flattened per-frame vector used throughout this
-  project.
+- Ablation: rerun the 3-seed comparison with `NORMALIZE_LANDMARKS = False` (everything else unchanged) to measure how much of the improvement over v1 comes from normalization.
+- Run more seeds to narrow the confidence intervals, and investigate why `vergi`, `hakli` and `nasil` remain the weakest classes.
+- Add a few own webcam recordings per word to training to reduce the studio-to-webcam gap.
+- Explore a graph-convolutional (ST-GCN-style) treatment of the landmark skeleton as an alternative to the flattened per-frame vector.
 
 ## Acknowledgements
 
-- [AUTSL dataset](https://cvml.ankara.edu.tr/datasets/) — Ankara University
-  Turkish Sign Language dataset. Please review AUTSL's own license/terms before
-  any use beyond this kind of educational/research project, and cite the original
-  dataset if you use it in your own work.
-- [MediaPipe](https://developers.google.com/mediapipe) — Pose Landmarker and Hand
-  Landmarker models used for feature extraction.
+- [AUTSL dataset](https://cvml.ankara.edu.tr/datasets/): Ankara University Turkish Sign Language dataset. Please review AUTSL's own license/terms before any use beyond this kind of educational/research project, and cite the original dataset if you use it in your own work.
+- [MediaPipe](https://developers.google.com/mediapipe): Pose Landmarker and Hand Landmarker models used for feature extraction.
